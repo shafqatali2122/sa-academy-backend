@@ -2,38 +2,64 @@
 
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../middleware/authMiddleware');
 const {
-  createCategory, getCategories, toggleCategory,
-  createMaterial, getMaterials, deleteMaterial, incrementDownload
+  createCategory,
+  getCategories,
+  toggleCategory,
+  createMaterial,
+  getMaterials,
+  deleteMaterial,
+  incrementDownload,
 } = require('../controllers/material.controller');
+
+// 1. Import BOTH middleware functions
+const { protect, authorizeRoles } = require('../middleware/authMiddleware');
 
 const multer = require('multer');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const cloudinary = require('../utils/cloudinary');
 
-// Configuration for Multer to upload files directly to Cloudinary
+// Configuration for Multer
 const storage = new CloudinaryStorage({
   cloudinary,
   params: {
     folder: 'sa-academy/materials',
-    resource_type: 'raw', // allows pdf, docx, zip (for materials)
-    public_id: (req, file) => `${Date.now()}_${file.originalname}`
-  }
+    resource_type: 'raw',
+    public_id: (req, file) => `${Date.now()}_${file.originalname}`,
+  },
 });
 const upload = multer({ storage });
 
-// Categories CRUD
-router.post('/categories', protect, createCategory);
-router.get('/categories', getCategories);
-router.put('/categories/:id/toggle', protect, toggleCategory);
+// 2. Define the roles that can manage content
+const contentManagerRoles = ['ContentAdmin', 'SuperAdmin'];
 
-// Materials CRUD (Note: POST uses the file upload middleware)
-router.post('/', protect, upload.single('file'), createMaterial);
-router.get('/', getMaterials);
-router.delete('/:id', protect, deleteMaterial);
+// --- Categories CRUD ---
+router
+  .route('/categories')
+  .post(protect, authorizeRoles(...contentManagerRoles), createCategory) // PRIVATE
+  .get(getCategories); // PUBLIC
 
-// Login-gated download (Increments download count)
-router.post('/:id/download', protect, incrementDownload);
+router
+  .route('/categories/:id/toggle')
+  .put(protect, authorizeRoles(...contentManagerRoles), toggleCategory); // PRIVATE
+
+// --- Materials CRUD ---
+router
+  .route('/')
+  .post(
+    protect,
+    authorizeRoles(...contentManagerRoles), // Added security
+    upload.single('file'), // Runs after auth
+    createMaterial
+  ) // PRIVATE
+  .get(getMaterials); // PUBLIC
+
+router
+  .route('/:id')
+  .delete(protect, authorizeRoles('SuperAdmin'), deleteMaterial); // PRIVATE
+
+// --- Login-gated download ---
+// We leave this with just 'protect' so any logged-in user can download
+router.route('/:id/download').post(protect, incrementDownload); // LOGIN-GATED
 
 module.exports = router;

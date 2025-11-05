@@ -3,47 +3,41 @@
 const express = require('express');
 const router = express.Router();
 const {
-    createCourse,
-    getCourses,
-    getCourseBySlug,
-    updateCourse,
-    deleteCourse,
+  createCourse,
+  getCourses,
+  getCourseBySlug,
+  getCourseById, // <-- WE CAN NOW IMPORT THIS
+  updateCourse,
+  deleteCourse,
 } = require('../controllers/course.controller');
 
-const { protect } = require('../middleware/authMiddleware');
+// 1. Import BOTH middleware functions
+const { protect, authorizeRoles } = require('../middleware/authMiddleware');
+
+// 2. Define the roles that can manage content
+const contentManagerRoles = ['ContentAdmin', 'SuperAdmin'];
 
 // =========================
 // ROUTES
 // =========================
 
 // CREATE (Protected) + READ ALL (Public)
-router.route('/')
-    .post(protect, createCourse)
-    .get(getCourses);
-
-// =========================
-// NEW: GET SINGLE COURSE BY ID
-// =========================
-router.get('/:id', async (req, res) => {
-    try {
-        const Course = require('../models/course.model');
-        const course = await Course.findById(req.params.id);
-        if (!course) {
-            return res.status(404).json({ message: 'Course not found' });
-        }
-        res.status(200).json(course);
-    } catch (error) {
-        console.error('Error fetching course by ID:', error.message);
-        res.status(500).json({ message: 'Server Error' });
-    }
-});
-
-// UPDATE (Protected) + DELETE (Protected)
-router.route('/:id')
-    .put(protect, updateCourse)
-    .delete(protect, deleteCourse);
+router
+  .route('/')
+  .post(protect, authorizeRoles(...contentManagerRoles), createCourse)
+  .get(getCourses);
 
 // PUBLIC: GET BY SLUG (used for frontend display)
 router.get('/slug/:slug', getCourseBySlug);
+
+// ALL ROUTES BELOW ARE FOR A SPECIFIC ID
+router
+  .route('/:id')
+  // GET BY ID (for admin "edit" page)
+  .get(protect, authorizeRoles(...contentManagerRoles), getCourseById)
+  // UPDATE (Protected)
+  .put(protect, authorizeRoles(...contentManagerRoles), updateCourse)
+  // DELETE (Protected - only SuperAdmin)
+  .delete(protect, authorizeRoles('SuperAdmin'), deleteCourse);
 
 module.exports = router;
