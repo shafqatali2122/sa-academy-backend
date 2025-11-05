@@ -3,7 +3,6 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/user.model');
-
 const { protect, authorizeRoles } = require('../middleware/authMiddleware');
 
 const {
@@ -13,6 +12,8 @@ const {
   getUsers,
   deleteUser,
   updateUserRole,
+  forgotPassword,   // ✅ NEW IMPORT
+  resetPassword,    // ✅ NEW IMPORT
 } = require('../controllers/user.controller');
 
 // -------------------------------------------
@@ -20,6 +21,19 @@ const {
 // -------------------------------------------
 router.post('/', registerUser);
 router.post('/login', authUser);
+
+// ✅ NEW PASSWORD RESET ROUTES
+// -------------------------------------------
+
+// @route   POST /api/users/forgot-password
+// @desc    Send password reset email
+// @access  Public
+router.post('/forgot-password', forgotPassword);
+
+// @route   PATCH /api/users/reset-password/:token
+// @desc    Reset password using token
+// @access  Public
+router.patch('/reset-password/:token', resetPassword);
 
 // -------------------------------------------
 // PROTECTED ROUTES

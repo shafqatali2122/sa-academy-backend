@@ -1,8 +1,14 @@
 // backend/controllers/user.controller.js
 
-const asyncHandler = require('express-async-handler'); // Handles async errors
+const asyncHandler = require('express-async-handler');
+const crypto = require('crypto'); // ✅ Added for password hashing
 const User = require('../models/user.model');
 const generateToken = require('../utils/generateToken');
+const sendEmail = require('../utils/email'); // ✅ Added email utility
+
+// =======================================================
+// === USER REGISTRATION & LOGIN ===
+// =======================================================
 
 // @desc    Register a new user
 // @route   POST /api/users
@@ -16,7 +22,6 @@ const registerUser = asyncHandler(async (req, res) => {
     return;
   }
 
-  // Because our model has a 'default' role, new users will be 'User'
   const user = await User.create({ username, email, password });
 
   if (user) {
@@ -24,8 +29,8 @@ const registerUser = asyncHandler(async (req, res) => {
       _id: user._id,
       username: user.username,
       email: user.email,
-      role: user.role, // Send the role back
-      token: generateToken(user._id, user.role), // Send role in token
+      role: user.role,
+      token: generateToken(user._id, user.role),
     });
   } else {
     res.status(400).json({ message: 'Invalid user data' });
@@ -44,29 +49,29 @@ const authUser = asyncHandler(async (req, res) => {
       _id: user._id,
       username: user.username,
       email: user.email,
-      role: user.role, // Send the role back
-      token: generateToken(user._id, user.role), // Send role in token
+      role: user.role,
+      token: generateToken(user._id, user.role),
     });
   } else {
     res.status(401).json({ message: 'Invalid email or password' });
   }
 });
 
-// ✅ IMPORT MODELS for dashboard stats
+// =======================================================
+// === DASHBOARD STATS ===
+// =======================================================
+
 const Course = require('../models/course.model');
 const Blog = require('../models/blog.model');
 const Enrollment = require('../models/enrollment.model');
 
-// @desc    Get dashboard statistics (counts)
-// @route   GET /api/users/dashboard-stats
-// @access  Private (Admin Only)
 const getDashboardStats = asyncHandler(async (req, res) => {
   const [
     totalCourses,
     publishedBlogCount,
-    draftBlogCount, // NEW: unpublished blogs
+    draftBlogCount,
     pendingEnrollmentCount,
-    processedEnrollmentCount, // NEW: processed enrollments
+    processedEnrollmentCount,
     pendingCounsellingCount,
   ] = await Promise.all([
     Course.countDocuments({}),
@@ -87,26 +92,18 @@ const getDashboardStats = asyncHandler(async (req, res) => {
     pendingCounselling: draftBlogCount,
     pendingEnrollments: pendingEnrollmentCount,
     processedEnrollments: processedEnrollmentCount,
-    processedEnrollments: processedEnrollmentCount,
   });
 });
 
 // =======================================================
-// === 🚀 NEW ADMIN FUNCTIONS ADDED BELOW ===
+// === ADMIN MANAGEMENT ===
 // =======================================================
 
-// @desc    Get all users (Admin only)
-// @route   GET /api/users
-// @access  Private/SuperAdmin
 const getUsers = asyncHandler(async (req, res) => {
-  // We find all users and send back only the fields we need
   const users = await User.find({}).select('-password');
   res.status(200).json(users);
 });
 
-// @desc    Delete a user (Admin only)
-// @route   DELETE /api/users/:id
-// @access  Private/SuperAdmin
 const deleteUser = asyncHandler(async (req, res) => {
   const user = await User.findById(req.params.id);
 
@@ -115,24 +112,18 @@ const deleteUser = asyncHandler(async (req, res) => {
     throw new Error('User not found');
   }
 
-  // We don't want admins deleting other SuperAdmins (including themselves)
   if (user.role === 'SuperAdmin') {
     res.status(400);
     throw new Error('Cannot delete a SuperAdmin');
   }
 
   await User.deleteOne({ _id: user._id });
-
   res.status(200).json({ id: req.params.id, message: 'User deleted successfully' });
 });
 
-// @desc    Update a user's role (Admin only)
-// @route   PUT /api/users/:id/role
-// @access  Private/SuperAdmin
 const updateUserRole = asyncHandler(async (req, res) => {
   const { role } = req.body;
 
-  // Check if the role is valid (using the roles from user.model.js)
   const validRoles = [
     'User',
     'SuperAdmin',
@@ -141,7 +132,6 @@ const updateUserRole = asyncHandler(async (req, res) => {
     'AudienceAdmin',
   ];
   if (!validRoles.includes(role)) {
-    // THIS IS THE LINE I FIXED
     res.status(400);
     throw new Error('Invalid role');
   }
@@ -156,26 +146,111 @@ const updateUserRole = asyncHandler(async (req, res) => {
   user.role = role;
   await user.save();
 
-  // Send back the updated user, but without the password
-  const updatedUser = {
+  res.status(200).json({
     _id: user._id,
     username: user.username,
     email: user.email,
     role: user.role,
-  };
-
-  res.status(200).json(updatedUser);
+  });
 });
 
-// ✅ Export all controllers (NOW INCLUDES NEW FUNCTIONS)
+// =======================================================
+// === PASSWORD RESET SYSTEM ===
+// =======================================================
+
+// @desc    Forgot Password
+// @route   POST /api/users/forgot-password
+// @access  Public
+const forgotPassword = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res
+        .status(200)
+        .json({ message: 'If a user with that email exists, a reset link has been sent.' });
+    }
+
+    const resetToken = user.createPasswordResetToken();
+    await user.save({ validateBeforeSave: false });
+
+    const resetURL = `${process.env.BASE_URL}/reset-password/${resetToken}`;
+    const message = `
+      You requested a password reset.
+      Please click the following link (valid for 10 minutes):
+      \n\n ${resetURL} \n\n
+      If you did not request this, please ignore this email.
+    `;
+
+    await sendEmail({
+      to: user.email,
+      subject: 'Password Reset Link (Valid for 10 min)',
+      text: message,
+    });
+
+    res.status(200).json({
+      message: 'If a user with that email exists, a reset link has been sent.',
+    });
+  } catch (error) {
+    console.error('FORGOT PASSWORD ERROR:', error);
+    if (user) {
+      user.passwordResetToken = undefined;
+      user.passwordResetExpires = undefined;
+      await user.save({ validateBeforeSave: false });
+    }
+    res.status(500).json({ message: 'Error sending reset email. Please try again.' });
+  }
+});
+
+// @desc    Reset Password
+// @route   POST /api/users/reset-password/:token
+// @access  Public
+const resetPassword = asyncHandler(async (req, res) => {
+  const resetToken = req.params.token;
+  const { password, confirmPassword } = req.body;
+
+  try {
+    const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+
+    const user = await User.findOne({
+      passwordResetToken: hashedToken,
+      passwordResetExpires: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return res.status(400).json({ message: 'Token is invalid or has expired.' });
+    }
+
+    if (password !== confirmPassword) {
+      return res.status(400).json({ message: 'Passwords do not match.' });
+    }
+
+    user.password = password;
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+    await user.save();
+
+    res.status(200).json({ message: 'Password reset successfully. Please log in.' });
+  } catch (error) {
+    console.error('RESET PASSWORD ERROR:', error);
+    res.status(500).json({ message: 'Error resetting password.' });
+  }
+});
+
+// =======================================================
+// === EXPORT ALL CONTROLLERS ===
+// =======================================================
 module.exports = {
-  // Existing functions
+  // Existing
   registerUser,
   authUser,
   getDashboardStats,
-
-  // NEW Admin functions
   getUsers,
   deleteUser,
   updateUserRole,
+
+  // New Password Reset
+  forgotPassword,
+  resetPassword,
 };
